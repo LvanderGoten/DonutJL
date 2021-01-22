@@ -203,7 +203,7 @@ function main()
         save(joinpath(RENDERINGS_DIR, img_id * ".png"), colorview(Gray, img))
     end
 
-    run(Cmd(`ffmpeg -framerate 30 -i %05d.png -vcodec libx264 -crf 22 ../../donut.mp4`, dir=RENDERINGS_DIR))
+    run(Cmd(`ffmpeg -framerate 30 -i %05d.png ../../donut.webm`, dir=RENDERINGS_DIR))
 
     if args["debug"]
         save_array(pts, joinpath("donut_temp", "pts.csv"))
