@@ -1,7 +1,7 @@
 ![Donut](donut.gif)
 
 # DonutJL
-Julia implementation of this wonderful [Article](https://www.a1k0n.net/2011/07/20/donut-math.html)
+Julia implementation of this wonderful [article](https://www.a1k0n.net/2011/07/20/donut-math.html). Generates a video instead of ASCII characters.
 
 ## System dependencies:
     1. FFMPEG
