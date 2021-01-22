@@ -148,8 +148,6 @@ function parse_commandline()
         "--field_of_view"
         default = deg2rad(120.)
         arg_type = Float64
-        "--save_as_video"
-        action = :store_true
         "--debug"
         action = :store_true
     end
@@ -196,11 +194,7 @@ function main()
                        field_of_view)
         β += δβ
         if β > 2 * π
-            if args["save_as_video"]
-                break
-            else
-                β -= 2 * π
-            end
+            break
         end
 
         i += 1
@@ -209,9 +203,7 @@ function main()
         save(joinpath(RENDERINGS_DIR, img_id * ".png"), colorview(Gray, img))
     end
 
-    if args["save_as_video"]
-        run(`convert -delay 1 -quality 100 donut_temp/renderings/\*.png out.mp4`)
-    end
+    run(Cmd(`ffmpeg -framerate 30 -i %05d.png -vcodec libx264 -crf 22 ../../donut.mp4`, dir=RENDERINGS_DIR))
 
     if args["debug"]
         save_array(pts, joinpath("donut_temp", "pts.csv"))
