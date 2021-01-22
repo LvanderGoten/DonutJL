@@ -1,3 +1,5 @@
+![Donut](donut.png)
+
 # DonutJL
 Julia implementation of this wonderful [Article](https://www.a1k0n.net/2011/07/20/donut-math.html)
 
