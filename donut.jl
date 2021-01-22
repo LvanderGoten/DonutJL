@@ -3,6 +3,7 @@ using Images
 using ImageFiltering
 using ImageTransformations
 using ProgressMeter
+using Printf
 
 LIGHT_DIRECTION = [0.0, 1.0, -1.0]/sqrt(2)
 RENDERINGS_DIR = "donut_temp/renderings"
@@ -204,7 +205,8 @@ function main()
 
         i += 1
 
-        save(joinpath(RENDERINGS_DIR, "$(i).png"), colorview(Gray, img))
+        img_id = @sprintf("%05d", i)
+        save(joinpath(RENDERINGS_DIR, img_id * ".png"), colorview(Gray, img))
     end
 
     if args["save_as_video"]
