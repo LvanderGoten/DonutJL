@@ -106,7 +106,7 @@ end
 
     end
 
-    img = (img .+ 1.)/2.
+    img = 1. .- abs.(img)
     img = reshape(img, (2^supersampling_factor, screen_width,
                         2^supersampling_factor, screen_height))
     img = dropdims(mean(img, dims=(1, 3)), dims=(1, 3))
