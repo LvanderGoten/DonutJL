@@ -1,12 +1,13 @@
 ![Donut](donut.gif)
 
 # DonutJL
-Julia implementation of this wonderful [article](https://www.a1k0n.net/2011/07/20/donut-math.html). Generates a video instead of ASCII characters.
+Julia implementation of this wonderful [article](https://www.a1k0n.net/2011/07/20/donut-math.html). 
 
 ## Usage:
 
 ```
-julia donut.jl -p <NUM_PROCESSES>
+julia -p <NUM_PROCESSES> donut.jl --mode=graphics
+julia -p 1 donut.jl --mode=terminal
 ```
 
 ## System dependencies:
