@@ -6,7 +6,7 @@ Julia implementation of this wonderful [article](https://www.a1k0n.net/2011/07/2
 ## Usage:
 
 ```
-julia donut.jl
+julia donut.jl -p <NUM_PROCESSES>
 ```
 
 ## System dependencies:
