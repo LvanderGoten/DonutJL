@@ -1,18 +1,16 @@
+@everywhere begin
+using Distributed
 using ArgParse
-using Images
-using ImageFiltering
-using ImageTransformations
 using ProgressMeter
+using Statistics
+using Images
+using ImageTransformations
+using LinearAlgebra
 using Printf
-
-LIGHT_DIRECTION = [0.0, 1.0, -1.0]/sqrt(2)
-RENDERINGS_DIR = "donut_temp/renderings"
-
-rm(RENDERINGS_DIR, force=true, recursive=true)
-mkpath(RENDERINGS_DIR)
+end
 
 
-function torus(R::Float64, r::Float64, δθ::Float64, δϕ::Float64)::Array{Float64, 3}
+@everywhere function torus(R::Float64, r::Float64, δθ::Float64, δϕ::Float64)::Array{Float64, 3}
     θ = range(0.0, step=δθ, stop=2 * π) # [Nθ]
     ϕ = range(0.0, step=δϕ, stop=2 * π) # [Nϕ]
 
@@ -25,7 +23,7 @@ function torus(R::Float64, r::Float64, δθ::Float64, δϕ::Float64)::Array{Floa
 end
 
 
-function torus_normals(R::Float64, r::Float64, δθ::Float64, δϕ::Float64)::Array{Float64, 3}
+@everywhere function torus_normals(R::Float64, r::Float64, δθ::Float64, δϕ::Float64)::Array{Float64, 3}
     θ = range(0.0, step=δθ, stop=2 * π) # [Nθ]
     ϕ = range(0.0, step=δϕ, stop=2 * π) # [Nϕ]
 
@@ -36,16 +34,17 @@ function torus_normals(R::Float64, r::Float64, δθ::Float64, δϕ::Float64)::Ar
     return cat(x, y, z, dims=3)     # [Nϕ, Nθ, 3]
 end
 
-function apply_rotation(pts::Array{Float64, 3}, δβ::Float64)::Array{Float64, 3}
+@everywhere function apply_rotation(pts::Array{Float64, 3}, δβ::Float64)::Array{Float64, 3}
     S = sum(pts, dims=3)
     return (S .+ (3 * pts .- S) * cos(δβ) + sqrt(3) * (circshift(pts, (0, 0, 1)) - circshift(pts, (0, 0, -1))) * sin(δβ))/3
 end
 
-function calculate_luminance(normals::Array{Float64, 3})::Array{Float64, 2}
-    return dropdims(sum(normals .* reshape(LIGHT_DIRECTION, 1, 1, 3), dims=3), dims=3)
+@everywhere function calculate_luminance(normals::Array{Float64, 3},
+        light_direction::Array{Float64})::Array{Float64, 2}
+    return dropdims(sum(normals .* reshape(light_direction, 1, 1, 3), dims=3), dims=3)
 end
 
-function save_array(arr::Array{Float64, 3}, fname::String)
+@everywhere function save_array(arr::Array{Float64, 3}, fname::String)
     flatArr = string.(reshape(arr, :, 3))
     open(fname, "w") do fout
         for row in eachrow(flatArr)
@@ -54,7 +53,7 @@ function save_array(arr::Array{Float64, 3}, fname::String)
     end
 end
 
-function perspective_projection(pts::Array{Float64, 3},
+@everywhere function perspective_projection(pts::Array{Float64, 3},
                                 distance_to_origin::Float64,
                                 distance_to_screen::Float64)::Array{Float64, 3}
     x_3d = pts[:, :, 1]     # [Nϕ, Nθ]
@@ -68,13 +67,17 @@ function perspective_projection(pts::Array{Float64, 3},
     return cat(x_2d, y_2d, z_2d, dims=3)    # [Nϕ, Nθ, 3]
 end
 
-function z_buffer(pts::Array{Float64, 3},
+@everywhere function z_buffer(pts::Array{Float64, 3},
                   luminance::Array{Float64, 2},
                   distance_to_origin::Float64,
                   distance_to_screen::Float64,
                   screen_width::Int64,
                   screen_height::Int64,
-                  field_of_view::Float64)::Array{Float64, 2}
+                  field_of_view::Float64,
+                  supersampling_factor::Int64)::Array{Float64, 2}
+    working_screen_width = screen_width << supersampling_factor
+    working_screen_height = screen_height << supersampling_factor
+    
     ptsFlat = reshape(pts, :, 3)
     L = reshape(luminance, :)  # [Nϕ ⋅ Nθ]
     x = ptsFlat[:, 1]          # [Nϕ ⋅ Nθ]
@@ -82,13 +85,13 @@ function z_buffer(pts::Array{Float64, 3},
     z = ptsFlat[:, 3]          # [Nϕ ⋅ Nθ]
 
     l = tan(field_of_view/2) * distance_to_screen
-    ii = convert(Array{Int64}, round.((x .+ l)/(2 * l) * (screen_width - 1) .+ 1))
-    jj = convert(Array{Int64}, round.((y .+ l)/(2 * l) * (screen_height - 1) .+ 1))
-    is_valid = (1 .<= ii .<= screen_width) .& (1 .<= jj .<= screen_height)
+    ii = convert(Array{Int64}, round.((x .+ l)/(2 * l) * (working_screen_width - 1) .+ 1))
+    jj = convert(Array{Int64}, round.((y .+ l)/(2 * l) * (working_screen_height - 1) .+ 1))
+    is_valid = (1 .<= ii .<= working_screen_width) .& (1 .<= jj .<= working_screen_height)
 
-    img = -ones(Float64, (screen_width, screen_height))
-    z_buffer = fill(typemax(Float64), (screen_width, screen_height))
-    for k in 1:length(L)
+    img = -ones(Float64, (working_screen_width, working_screen_height))
+    z_buffer = fill(typemax(Float64), (working_screen_width, working_screen_height))
+    @inbounds for k in 1:length(L)
         if !is_valid[k]
             continue
         end
@@ -103,8 +106,9 @@ function z_buffer(pts::Array{Float64, 3},
     end
 
     img = (img .+ 1.)/2.
-    img = imfilter(img, Kernel.gaussian(9))
-    img = imresize(img, (512, 512))
+    img = reshape(img, (2^supersampling_factor, screen_width,
+                        2^supersampling_factor, screen_height))
+    img = dropdims(mean(img, dims=(1, 3)), dims=(1, 3))
 
     return img
 end
@@ -140,16 +144,24 @@ function parse_commandline()
         default = 10.
         arg_type = Float64
         "--screen_width"
-        default = 2048
+        default = 512
         arg_type = Int64
         "--screen_height"
-        default = 2048
+        default = 512
         arg_type = Int64
         "--field_of_view"
         default = deg2rad(120.)
         arg_type = Float64
-        "--debug"
-        action = :store_true
+        "--light_direction"
+        default = [0., -1., 1.]
+        arg_type = Float64
+        nargs = '+'
+        "--supersampling_factor"
+        default = 3
+        arg_type = Int64
+        "--renderings_dir"
+        default = "donut_temp/renderings"
+        arg_type = String
     end
 
     return parse_args(s)
@@ -157,31 +169,32 @@ end
 
 function main()
     args = parse_commandline()
-    r                  = args["r"]
-    R                  = args["R"]
-    δθ                 = args["delta_theta"]
-    δϕ                 = args["delta_phi"]
-    δβ                 = args["delta_beta"]
-    distance_to_screen = args["distance_to_screen"]
-    distance_to_origin = args["distance_to_origin"]
-    screen_width       = args["screen_width"]
-    screen_height      = args["screen_height"]
-    field_of_view      = args["field_of_view"]
+    r                    = args["r"]
+    R                    = args["R"]
+    δθ                   = args["delta_theta"]
+    δϕ                   = args["delta_phi"]
+    δβ                   = args["delta_beta"]
+    distance_to_screen   = args["distance_to_screen"]
+    distance_to_origin   = args["distance_to_origin"]
+    screen_width         = args["screen_width"]
+    screen_height        = args["screen_height"]
+    field_of_view        = args["field_of_view"]
+    light_direction      = normalize(args["light_direction"])
+    supersampling_factor = args["supersampling_factor"]
+    renderings_dir       = args["renderings_dir"]
+
+    rm(renderings_dir, force=true, recursive=true)
+    mkpath(renderings_dir)
 
     pts                      = torus(R, r, δθ, δϕ)           # [Nϕ, Nθ, 3]
     pts_normals              = torus_normals(R, r, δθ, δϕ)   # [Nϕ, Nθ, 3]
-    pts_rot, pts_normals_rot = nothing, nothing
-    img                      = nothing
 
-    β = 0.
-    i = 0
-    prog = ProgressUnknown("Frames generated: ")
-    while true
-        ProgressMeter.next!(prog)
+    β = range(0.0, step=δβ, stop=2 * π)
+    @showprogress 1 "Computed frames:" pmap(1:length(β)) do i
 
-        pts_rot         = apply_rotation(pts, β)               # [Nϕ, Nθ, 3]
-        pts_normals_rot = apply_rotation(pts_normals, β)       # [Nϕ, Nθ, 3]
-        luminance       = calculate_luminance(pts_normals_rot)  # [Nϕ, Nθ]
+        pts_rot         = apply_rotation(pts, β[i])               # [Nϕ, Nθ, 3]
+        pts_normals_rot = apply_rotation(pts_normals, β[i])       # [Nϕ, Nθ, 3]
+        luminance       = calculate_luminance(pts_normals_rot, light_direction)  # [Nϕ, Nθ]
         pts_rot_proj    = perspective_projection(pts_rot,
                                                  distance_to_origin,
                                                  distance_to_screen)
@@ -191,26 +204,14 @@ function main()
                        distance_to_screen,
                        screen_width,
                        screen_height,
-                       field_of_view)
-        β += δβ
-        if β > 2 * π
-            break
-        end
-
-        i += 1
+                       field_of_view,
+                       supersampling_factor)
 
         img_id = @sprintf("%05d", i)
-        save(joinpath(RENDERINGS_DIR, img_id * ".png"), colorview(Gray, img))
+        save(joinpath(renderings_dir, img_id * ".png"), colorview(Gray, img))
     end
 
-    run(Cmd(`ffmpeg -framerate 30 -i %05d.png ../../donut.webm`, dir=RENDERINGS_DIR))
-
-    if args["debug"]
-        save_array(pts, joinpath("donut_temp", "pts.csv"))
-        save_array(pts_rot, joinpath("donut_temp", "pts_rot.csv"))
-        save_array(pts_normals, joinpath("donut_temp", "pts_normals.csv"))
-        save_array(pts_normals_rot, joinpath("donut_temp", "pts_normals_rot.csv"))
-    end
+    run(Cmd(`ffmpeg -y -loglevel warning -framerate 30 -i %05d.png ../../donut.webm`, dir=renderings_dir))
 
 end
 
