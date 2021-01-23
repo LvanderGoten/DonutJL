@@ -7,8 +7,9 @@ using Images
 using ImageTransformations
 using LinearAlgebra
 using Printf
-end
 
+ASCII_CHARS = raw".,-~:;=!*#$@"
+end
 
 @everywhere function torus(R::Float64, r::Float64, δθ::Float64, δϕ::Float64)::Array{Float64, 3}
     θ = range(0.0, step=δθ, stop=2 * π) # [Nθ]
@@ -113,8 +114,14 @@ end
     return img
 end
 
-function print_to_screen(img::Array{Float32, 2})
-    # TODO
+@everywhere function print_to_screen(img::Array{Float64, 2})
+    levels = range(0., stop=1., length=length(ASCII_CHARS) + 1)
+    (lo, hi) = (levels[begin:end-1], levels[begin+1:end])
+    img = repeat(reshape(img, size(img)..., 1), 1, 1, length(ASCII_CHARS))
+    membership = (img .>= reshape(lo, 1, 1, :)) .& (img .< reshape(hi, 1, 1, :))
+    ix = map(x -> x[3], dropdims(argmax(membership, dims=3), dims=3))
+
+    println("\x1b[H" * join([ASCII_CHARS[ix[coord]] for coord in eachindex(ix)]))
 end
 
 
@@ -122,6 +129,10 @@ function parse_commandline()
     s = ArgParseSettings()
 
     @add_arg_table s begin
+        "--mode"
+        arg_type = String
+        required = true
+        help = "(Options 'terminal', 'graphics')"
         "--r"
         default = 2.
         arg_type = Float64
@@ -169,6 +180,10 @@ end
 
 function main()
     args = parse_commandline()
+    @assert args["mode"] in ("terminal", "graphics") "Unsupported mode!"
+    @assert (args["mode"] == "graphics" || nprocs() == 2) "Multiprocessing is only supported in graphics mode!"
+
+    mode                 = args["mode"]
     r                    = args["r"]
     R                    = args["R"]
     δθ                   = args["delta_theta"]
@@ -190,7 +205,13 @@ function main()
     pts_normals              = torus_normals(R, r, δθ, δϕ)   # [Nϕ, Nθ, 3]
 
     β = range(0.0, step=δβ, stop=2 * π)
-    @showprogress 1 "Computed frames:" pmap(1:length(β)) do i
+    is_distributed = mode == "graphics" && nprocs() > 2
+    wait_time = mode == "graphics" ? 1 : Inf
+    @showprogress wait_time "Computed frames:" pmap(1:length(β), distributed=is_distributed) do i
+        if mode == "terminal"
+            screen_width  = parse(Int, read(`tput cols`, String))
+            screen_height = parse(Int, read(`tput lines`, String))
+        end
 
         pts_rot         = apply_rotation(pts, β[i])               # [Nϕ, Nθ, 3]
         pts_normals_rot = apply_rotation(pts_normals, β[i])       # [Nϕ, Nθ, 3]
@@ -207,11 +228,17 @@ function main()
                        field_of_view,
                        supersampling_factor)
 
-        img_id = @sprintf("%05d", i)
-        save(joinpath(renderings_dir, img_id * ".png"), colorview(Gray, img))
+        if mode == "terminal"
+            print_to_screen(img)
+        else
+            img_id = @sprintf("%05d", i)
+            save(joinpath(renderings_dir, img_id * ".png"), colorview(Gray, img))
+        end
     end
 
-    run(Cmd(`ffmpeg -y -loglevel warning -framerate 30 -i %05d.png ../../donut.webm`, dir=renderings_dir))
+    if mode == "graphics"
+        run(Cmd(`ffmpeg -y -loglevel warning -framerate 30 -i %05d.png ../../donut.webm`, dir=renderings_dir))
+    end
 
 end
 
